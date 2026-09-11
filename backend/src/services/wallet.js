@@ -1,9 +1,14 @@
 /**
- * Wallet Service — topup, transactions, internal adjust
+ * Wallet Service — topup, transactions, internal adjust.
+ *
+ * Owns the chip-economy rules (limits, idempotency, non-negative balance) and
+ * the transaction boundaries. All SQL is delegated to wallet.model, which
+ * writes the `wallets` balance and the `transactions` ledger together.
  */
-import { pool, withTransaction } from '../config/db.js';
+import { withTransaction } from '../config/db.js';
 import { env } from '../config/env.js';
 import { ApiError } from '../middleware/errors.js';
+import * as wallet from '../models/wallet.model.js';
 
 /**
  * POST /wallet/topup — เติมชิป
@@ -25,35 +30,17 @@ export async function topUp(userId, amount) {
 
   return withTransaction(async (conn) => {
     // Lock wallet row and read current balance
-    const [walletRows] = await conn.query(
-      `SELECT balance FROM wallets WHERE user_id = :userId FOR UPDATE`,
-      { userId }
-    );
-
-    if (!walletRows.length) {
+    const walletRow = await wallet.lockWallet(userId, conn);
+    if (!walletRow) {
       throw new ApiError('WALLET_NOT_FOUND', 'Wallet not found', 404);
     }
 
-    const balanceAfter = walletRows[0].balance + amount;
+    const balanceAfter = walletRow.balance + amount;
 
-    // Update wallet
-    await conn.query(
-      `UPDATE wallets SET balance = :balanceAfter, version = version + 1, updated_at = NOW()
-       WHERE user_id = :userId`,
-      { balanceAfter, userId }
-    );
-
-    // Insert transaction
-    await conn.query(
-      `INSERT INTO transactions (user_id, amount, type, ref_id, balance_after, note)
-       VALUES (:userId, :amount, 'TOPUP', :refId, :balanceAfter, :note)`,
-      {
-        userId,
-        amount,
-        refId,
-        balanceAfter,
-        note: `Topup ${amount} chips`,
-      }
+    await wallet.updateBalance({ userId, balanceAfter }, conn);
+    await wallet.insertTransaction(
+      { userId, amount, type: 'TOPUP', refId, balanceAfter, note: `Topup ${amount} chips` },
+      conn
     );
 
     return { balance: balanceAfter, amount, type: 'TOPUP' };
@@ -68,20 +55,8 @@ export async function getTransactions(userId, page = 1, limit = 20) {
   limit = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
   const offset = (page - 1) * limit;
 
-  const [rows] = await pool.query(
-    `SELECT id, amount, type, ref_id, balance_after, note, created_at
-     FROM transactions
-     WHERE user_id = :userId
-     ORDER BY created_at DESC, id DESC
-     LIMIT :limit OFFSET :offset`,
-    { userId, limit, offset }
-  );
-
-  const [countResult] = await pool.query(
-    `SELECT COUNT(*) as total FROM transactions WHERE user_id = :userId`,
-    { userId }
-  );
-  const total = countResult[0].total;
+  const rows = await wallet.listTransactions(userId, { limit, offset });
+  const total = await wallet.countTransactions(userId);
 
   return {
     transactions: rows,
@@ -102,12 +77,8 @@ export async function adjustWallet(userId, amount, refId, note = '') {
     const txType = amount > 0 ? 'WIN' : 'LOSS';
 
     // 1. Lock wallet row first — prevents race on balance
-    const [walletRows] = await conn.query(
-      `SELECT balance FROM wallets WHERE user_id = :userId FOR UPDATE`,
-      { userId }
-    );
-
-    if (!walletRows.length) {
+    const walletRow = await wallet.lockWallet(userId, conn);
+    if (!walletRow) {
       throw new ApiError('WALLET_NOT_FOUND', 'Wallet not found', 404);
     }
 
@@ -115,46 +86,33 @@ export async function adjustWallet(userId, amount, refId, note = '') {
     //    This ensures that two parallel requests with the same ref_id
     //    serialize through the wallet lock — the second one sees the
     //    transaction already committed by the first.
-    const [existing] = await conn.query(
-      `SELECT balance_after, amount FROM transactions WHERE ref_id = :refId LIMIT 1`,
-      { refId }
-    );
-
-    if (existing.length > 0) {
+    const existing = await wallet.findTransactionByRef(refId, conn);
+    if (existing) {
       return {
-        balance: existing[0].balance_after,
-        amount: existing[0].amount,
+        balance: existing.balance_after,
+        amount: existing.amount,
         type: 'SETTLE',
         idempotent: true,
       };
     }
 
-    const currentBalance = walletRows[0].balance;
-    const balanceAfter = currentBalance + amount;
-
+    const balanceAfter = walletRow.balance + amount;
     if (balanceAfter < 0) {
       throw new ApiError('INSUFFICIENT_BALANCE', 'Insufficient balance');
     }
 
-    // 3. Update wallet
-    await conn.query(
-      `UPDATE wallets SET balance = :balanceAfter, version = version + 1, updated_at = NOW()
-       WHERE user_id = :userId`,
-      { balanceAfter, userId }
-    );
-
-    // 4. Insert transaction
-    await conn.query(
-      `INSERT INTO transactions (user_id, amount, type, ref_id, balance_after, note)
-       VALUES (:userId, :amount, :txType, :refId, :balanceAfter, :note)`,
+    // 3. Update wallet + 4. append ledger row
+    await wallet.updateBalance({ userId, balanceAfter }, conn);
+    await wallet.insertTransaction(
       {
         userId,
         amount,
+        type: txType,
         refId,
         balanceAfter,
-        txType,
         note: note || `Adjust ${amount} chips (hand: ${refId})`,
-      }
+      },
+      conn
     );
 
     return { balance: balanceAfter, amount, type: txType, idempotent: false };

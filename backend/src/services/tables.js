@@ -1,8 +1,16 @@
-import { pool } from '../config/db.js';
+/**
+ * Table / lobby service — room creation, listing, and join validation.
+ *
+ * SQL lives in table.model / wallet.model. This layer owns the rules:
+ * room-code generation, the create-retry on code collisions, merging the
+ * best-effort live seat count from Redis, and every join failure mode.
+ */
 import { getRedis } from '../config/redis.js';
 import { errors, ApiError } from '../middleware/errors.js';
 import { validate } from '../middleware/validate.js';
 import { createTableSchema, joinTableSchema, roomCodeSchema } from '../validators/tables.js';
+import * as tables from '../models/table.model.js';
+import { getBalance } from '../models/wallet.model.js';
 
 // Letters/digits with ambiguous glyphs (0/O, 1/I) removed so a room code is
 // easy to read aloud / retype from a screen.
@@ -54,8 +62,7 @@ function serializeTable(row, seatsTaken) {
 
 async function findTableRow(roomCode) {
   const code = validate(roomCodeSchema, roomCode, 'Invalid room code');
-  const [rows] = await pool.query(`SELECT * FROM tables WHERE room_code = :code LIMIT 1`, { code });
-  return rows[0] || null;
+  return tables.findByRoomCode(code);
 }
 
 function roomNotFoundError() {
@@ -74,20 +81,16 @@ export async function createTable(hostId, input) {
   for (let attempt = 0; attempt < MAX_CODE_ATTEMPTS; attempt++) {
     const roomCode = randomRoomCode();
     try {
-      const [result] = await pool.query(
-        `INSERT INTO tables (room_code, name, host_id, min_bet, max_bet, max_seats, status)
-         VALUES (:roomCode, :name, :hostId, :minBet, :maxBet, :maxSeats, 'OPEN')`,
-        {
-          roomCode,
-          name: data.name,
-          hostId,
-          minBet: data.min_bet,
-          maxBet: data.max_bet,
-          maxSeats: data.max_seats,
-        }
-      );
-      const [rows] = await pool.query(`SELECT * FROM tables WHERE id = :id LIMIT 1`, { id: result.insertId });
-      return serializeTable(rows[0], 0);
+      const insertId = await tables.insertTable({
+        roomCode,
+        name: data.name,
+        hostId,
+        minBet: data.min_bet,
+        maxBet: data.max_bet,
+        maxSeats: data.max_seats,
+      });
+      const row = await tables.findById(insertId);
+      return serializeTable(row, 0);
     } catch (err) {
       // room_code collision — try another random code.
       if (err && err.code === 'ER_DUP_ENTRY' && /uq_tables_room_code/.test(err.message || '')) {
@@ -104,17 +107,11 @@ export async function createTable(hostId, input) {
  * Returns an array of serialized table objects.
  */
 export async function listOpenTables() {
-  const [rows] = await pool.query(
-    `SELECT * FROM tables WHERE status = 'OPEN' ORDER BY created_at DESC`
-  );
+  const rows = await tables.listOpen();
   // Best-effort: attach live seat count for each table
-  const results = await Promise.all(
-    rows.map(async (row) => {
-      const seatsTaken = await getLiveSeatCount(row.id);
-      return serializeTable(row, seatsTaken);
-    })
+  return Promise.all(
+    rows.map(async (row) => serializeTable(row, await getLiveSeatCount(row.id)))
   );
-  return results;
 }
 
 /**
@@ -172,8 +169,7 @@ export async function joinTable(userId, roomCode, input) {
     });
   }
 
-  const [walletRows] = await pool.query(`SELECT balance FROM wallets WHERE user_id = :userId LIMIT 1`, { userId });
-  const balance = walletRows.length ? walletRows[0].balance : 0;
+  const balance = (await getBalance(userId)) ?? 0;
   const requiredAmount = buy_in ?? row.min_bet;
 
   if (balance < requiredAmount) {
@@ -184,17 +180,4 @@ export async function joinTable(userId, roomCode, input) {
   }
 
   return serializeTable(row, seatsTaken);
-}
-
-export async function isClientExist(clientId) {
-  const [rows] = await pool.query(`SELECT id FROM users WHERE id = :clientId LIMIT 1;`, { clientId });
-  return rows.length > 0;
-}
-
-export async function getClientUsername(clientId) {
-  const [rows] = await pool.query(`SELECT username FROM users WHERE id = :clientId LIMIT 1;`, { clientId });
-  if (rows.length > 0) {
-    return rows[0].username;
-  }
-  return null;
 }

@@ -167,6 +167,9 @@
     let latestState;
     let countdownTimer;
     let betAmount = 100;
+    let betStep = 10;      // step size = big blind (set from table state)
+    let betMin = 10;       // smallest legal "to" amount (BET=big blind, RAISE=min_raise)
+    let betMax = Infinity; // largest "to" amount = going all-in
     let renderedActionKey = '';
     const actionButtons = [...document.querySelectorAll('[data-action]')];
     const startButton = document.getElementById('start-game-button');
@@ -271,11 +274,24 @@
         renderedActionKey = actionKey;
       }
       const isHost = String(state.host_id) === String(currentUser.id);
-      startButton.hidden = !isHost || state.phase !== 'WAITING';
-      actionButtons.forEach((button) => {
-        button.disabled = state.phase === 'WAITING' || String(state.current_turn) !== String(currentUser.id);
-      });
+      if (state.phase === 'SHOWDOWN') {
+        // Vote-to-continue: everyone readies up to deal the next hand.
+        const votes = (state.ready_votes || []).length;
+        const needed = state.ready_needed || 0;
+        const voted = (state.ready_votes || []).map(String).includes(String(currentUser.id));
+        startButton.hidden = false;
+        startButton.textContent = voted ? `WAITING… (${votes}/${needed})` : `NEXT ROUND (${votes}/${needed})`;
+        startButton.disabled = voted;
+      } else if (state.phase === 'WAITING') {
+        // Any player can start the first hand once at least 2 are seated.
+        startButton.hidden = false;
+        startButton.textContent = 'START GAME';
+        startButton.disabled = false;
+      } else {
+        startButton.hidden = true;
+      }
       const myTurn = String(state.current_turn) === String(currentUser.id);
+      updateActionControls(state, me, myTurn);
       document.querySelector('.user-section').classList.toggle('is-your-turn', myTurn);
       document.getElementById('turn-timer').style.visibility = state.current_turn ? 'visible' : 'hidden';
       document.getElementById('turn-label').textContent = myTurn ? 'Your Turn' : `${text(state.current_turn_name || 'Waiting')}'s turn`;
@@ -330,21 +346,47 @@
     }
 
     connectTable().catch((error) => { roomStatus.textContent = error.message || 'Unable to join table'; });
-    startButton.addEventListener('click', () => socket?.send(JSON.stringify({ type: 'START_GAME' })));
+    startButton.addEventListener('click', () => {
+      const type = latestState?.phase === 'SHOWDOWN' ? 'VOTE_NEXT' : 'START_GAME';
+      socket?.send(JSON.stringify({ type }));
+    });
     document.getElementById('hand-guide-button').addEventListener('click', () => { handGuide.hidden = false; });
     document.getElementById('hand-guide-close').addEventListener('click', () => { handGuide.hidden = true; });
     leaveButton.addEventListener('click', () => {
       if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'LEAVE_ROOM' }));
       else window.location.href = 'lobby.html';
     });
-    document.querySelector('.small-control:first-child').addEventListener('click', () => {
-      betAmount = Math.max(10, betAmount - 10);
-      document.querySelector('.bet-value strong').textContent = betAmount;
-    });
-    document.querySelector('.small-control:last-child').addEventListener('click', () => {
-      betAmount += 10;
-      document.querySelector('.bet-value strong').textContent = betAmount;
-    });
+    function setBetAmount(v) {
+      betAmount = Math.min(Math.max(v, betMin), Math.max(betMin, betMax));
+      for (const sel of ['.bet-value strong', '[data-action="BET"] strong', '[data-action="RAISE"] strong']) {
+        const el = document.querySelector(sel);
+        if (el) el.textContent = betAmount;
+      }
+    }
+    // Enable/disable action buttons by real poker legality and keep the bet
+    // stepper inside the legal range (BET >= big blind, RAISE >= min_raise,
+    // both capped at the player's all-in amount).
+    function updateActionControls(state, me, myTurn) {
+      const btn = (a) => document.querySelector(`[data-action="${a}"]`);
+      const inHand = myTurn && me && me.status !== 'FOLDED' && me.status !== 'ALL-IN';
+      const toCall = me ? (me.to_call || 0) : 0;
+      const currentBet = state.current_bet || 0;
+      const bb = state.big_blind || 10;
+      const maxTo = me ? (me.bet || 0) + (me.chips || 0) : 0; // all-in "to" amount
+      betStep = bb;
+      betMin = currentBet > 0 ? (state.min_raise || currentBet + bb) : bb;
+      betMax = maxTo;
+      setBetAmount(betAmount); // re-clamp into the new legal range
+      const callStrong = btn('CALL') && btn('CALL').querySelector('strong');
+      if (callStrong) callStrong.textContent = toCall > 0 ? `CALL ${PokerAPI.fmtChips(toCall)}` : 'CALL';
+      btn('FOLD').disabled = !inHand;
+      btn('CHECK').disabled = !inHand || toCall !== 0;
+      btn('CALL').disabled = !inHand || toCall === 0;
+      btn('BET').disabled = !inHand || currentBet !== 0 || !me || me.chips <= 0;
+      btn('RAISE').disabled = !inHand || currentBet === 0 || maxTo <= currentBet;
+    }
+    document.querySelector('.small-control:first-child').addEventListener('click', () => setBetAmount(betAmount - betStep));
+    document.querySelector('.small-control:last-child').addEventListener('click', () => setBetAmount(betAmount + betStep));
     actionButtons.forEach((button) => button.addEventListener('click', () => {
       socket?.send(JSON.stringify({ type: 'GAME_ACTION', params: { action: button.dataset.action, amount: button.dataset.action === 'BET' || button.dataset.action === 'RAISE' ? betAmount : 0 } }));
     }));

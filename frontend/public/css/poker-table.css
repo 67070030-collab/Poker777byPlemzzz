@@ -599,12 +599,45 @@ button {
 }
 
 @media (max-width: 620px) {
+  body { overflow-x: hidden; }
   .room-panel { min-width: 0; width: 100%; border-radius: 18px; flex-wrap: wrap; }
   .room-panel > div { flex: 1 1 150px; }
   .table-tool-button, .table-leave-button { padding: 7px 9px; font-size: 10px; }
   .hand-guide { top: 20px; right: 20px; left: 20px; width: auto; max-height: calc(100vh - 40px); }
   .table-notifications { top: 145px; }
-  .current-hand { bottom: 20%; min-width: 160px; }
+
+  /* table + cards shrink to fit the phone */
+  .table-wrapper { width: 94vw; height: auto; min-height: 340px; margin-top: 64px; }
+  .community-cards .community-card, .playing-card { width: 44px; height: 64px; }
+  .playing-card b { font-size: 13px; } .playing-card span { font-size: 16px; }
+  .current-hand { bottom: 26%; min-width: 150px; }
+
+  /* the player's own area */
+  .user-section { bottom: 168px; transform: translateX(-50%) scale(.72); }
+  .user-card { width: 56px; height: 78px; font-size: 15px; }
+  .user-card b { font-size: 15px; } .user-card span { font-size: 18px; }
+
+  /* action bar: full-width, wraps, buttons flex to fit instead of overflowing */
+  .action-bar {
+    right: auto; left: 50%; transform: translateX(-50%);
+    bottom: 12px; width: calc(100vw - 16px); gap: 8px;
+    flex-wrap: wrap; justify-content: center;
+  }
+  .action-button { min-width: 0; flex: 1 1 58px; height: 58px; border-radius: 12px; gap: 2px; }
+  .action-button .action-icon { font-size: 17px; }
+  .action-button strong { font-size: 12px; }
+  .raise { min-width: 0; flex: 1 1 58px; }
+  .start-game-button { flex: 1 1 100%; height: 52px; }
+  /* bet stepper moves into the flow above the buttons */
+  .bet-control { position: static; order: -1; flex: 1 1 100%; justify-content: center; margin: 0 auto 4px; }
+}
+
+@media (max-width: 420px) {
+  .action-button { flex: 1 1 46px; height: 52px; }
+  .action-button strong { font-size: 11px; }
+  .action-button .action-icon { font-size: 15px; }
+  .user-section { bottom: 176px; transform: translateX(-50%) scale(.62); }
+  .pot { padding: 6px 16px; } .pot strong { font-size: 16px; }
 }
 
 .p1 { left: 15%; top: 25%; } .p2 { left: 80%; top: 15%; animation-delay: .5s; }

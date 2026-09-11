@@ -1,10 +1,19 @@
+/**
+ * Auth & user service — business logic for register / login / profile.
+ *
+ * All SQL lives in the models (user.model, wallet.model); this layer owns the
+ * rules: validation, password hashing, JWT signing, the welcome-bonus policy,
+ * and transaction boundaries.
+ */
 import bcrypt from 'bcryptjs';
 import { jwt } from '../middleware/auth.js';
 import { env } from '../config/env.js';
-import { pool, withTransaction } from '../config/db.js';
+import { withTransaction } from '../config/db.js';
 import { errors } from '../middleware/errors.js';
 import { validate } from '../middleware/validate.js';
 import { registerSchema, loginSchema, updateUserSchema } from '../validators/auth.js';
+import * as users from '../models/user.model.js';
+import * as wallet from '../models/wallet.model.js';
 
 const BCRYPT_COST = 12;
 
@@ -21,12 +30,9 @@ export async function registerUser(input) {
 
   // Pre-check to give a nicer 409 (the unique constraints will still reject
   // any race that slips between the check and the insert).
-  const [existing] = await pool.query(
-    `SELECT username FROM users WHERE username = :username OR email = :email LIMIT 1`,
-    { username, email }
-  );
-  if (existing.length) {
-    const clash = existing[0].username === username ? 'username' : 'email';
+  const clashRow = await users.findLoginConflict({ username, email });
+  if (clashRow) {
+    const clash = clashRow.username === username ? 'username' : 'email';
     throw errors.conflict(
       clash === 'username' ? 'USERNAME_TAKEN' : 'EMAIL_TAKEN',
       `${clash === 'username' ? 'Username' : 'Email'} already registered`
@@ -36,28 +42,16 @@ export async function registerUser(input) {
   const passwordHash = await bcrypt.hash(password, BCRYPT_COST);
   const bonus = env.economy.welcomeBonus;
 
-  const { userId } = await withTransaction(async (conn) => {
-    const [userRows] = await conn.query(
-      `INSERT INTO users (username, email, password_hash)
-       VALUES (:username, :email, :passwordHash)`,
-      { username, email, passwordHash }
+  const userId = await withTransaction(async (conn) => {
+    const newUserId = await users.insertUser({ username, email, passwordHash }, conn);
+    // Create the wallet with the welcome bonus as the starting balance,
+    // then append the matching ledger row (ref_id guarantees idempotency).
+    await wallet.createWallet({ userId: newUserId, balance: bonus }, conn);
+    await wallet.insertTransaction(
+      { userId: newUserId, amount: bonus, type: 'BONUS', refId: `register:${newUserId}`, balanceAfter: bonus },
+      conn
     );
-    const newUserId = String(userRows.insertId);
-
-    // Create wallet with the welcome bonus as the starting balance.
-    await conn.query(
-      `INSERT INTO wallets (user_id, balance) VALUES (:userId, :bonus)`,
-      { userId: newUserId, bonus }
-    );
-
-    // Append the ledger row. ref_id guarantees idempotency.
-    await conn.query(
-      `INSERT INTO transactions (user_id, type, amount, balance_after, ref_id)
-       VALUES (:userId, 'BONUS', :bonus, :bonus, :refId)`,
-      { userId: newUserId, bonus, refId: `register:${newUserId}` }
-    );
-
-    return { userId: newUserId };
+    return newUserId;
   });
 
   const token = signJwt(userId, username);
@@ -74,40 +68,23 @@ export async function registerUser(input) {
 export async function loginUser(input) {
   const { identifier, password } = validate(loginSchema, input);
 
-  // Look up by username OR email.
-  const [rows] = await pool.query(
-    `SELECT id, username, email, password_hash
-       FROM users
-      WHERE username = :identifier OR email = :identifier
-      LIMIT 1`,
-    { identifier }
-  );
+  const user = await users.findByIdentifier(identifier);
   // Always run a bcrypt compare even when not found, to keep timing uniform.
   const dummyHash = '$2a$12$000000000000000000000000000000000000000000000000000000';
-  const hash = rows.length ? rows[0].password_hash : dummyHash;
+  const hash = user ? user.password_hash : dummyHash;
   const ok = await bcrypt.compare(password, hash);
-  if (!rows.length || !ok) {
+  if (!user || !ok) {
     throw errors.unauthorized('Invalid credentials');
   }
 
-  const user = rows[0];
   const token = signJwt(String(user.id), user.username);
   return { token, user: { id: String(user.id), username: user.username } };
 }
 
 /** Fetch the current user's profile + wallet balance. */
 export async function getUserProfile(userId) {
-  const [rows] = await pool.query(
-    `SELECT u.id, u.username, u.email, u.display_name, u.avatar_id, u.created_at,
-            w.balance
-       FROM users u
-       LEFT JOIN wallets w ON w.user_id = u.id
-      WHERE u.id = :userId
-      LIMIT 1`,
-    { userId }
-  );
-  if (!rows.length) throw errors.notFound('User not found');
-  const u = rows[0];
+  const u = await users.findProfileById(userId);
+  if (!u) throw errors.notFound('User not found');
   return {
     id: String(u.id),
     username: u.username,
@@ -123,18 +100,12 @@ export async function getUserProfile(userId) {
 export async function updateUserProfile(userId, patch) {
   const data = validate(updateUserSchema, patch);
 
-  const [result] = await pool.query(
-    `UPDATE users SET
-        avatar_id  = COALESCE(:avatar_id, avatar_id),
-        display_name = COALESCE(:display_name, display_name)
-      WHERE id = :userId`,
-    {
-      avatar_id: data.avatar_id ?? null,
-      display_name: data.display_name ?? null,
-      userId,
-    }
-  );
-  if (result.affectedRows === 0) throw errors.notFound('User not found');
+  const affected = await users.updateProfile({
+    userId,
+    avatar_id: data.avatar_id ?? null,
+    display_name: data.display_name ?? null,
+  });
+  if (affected === 0) throw errors.notFound('User not found');
   return getUserProfile(userId);
 }
 
