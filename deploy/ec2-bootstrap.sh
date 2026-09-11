@@ -10,7 +10,7 @@
 # clone with a token:  git clone https://<TOKEN>@github.com/getzaa456/Poker777.git
 set -euo pipefail
 
-REPO_URL="https://github.com/getzaa456/Poker777.git"
+REPO_URL="https://github.com/67070030-collab/Poker777byPlemzzz.git"
 APP_DIR="$HOME/Poker777"
 
 echo "==> Installing Docker + git…"
