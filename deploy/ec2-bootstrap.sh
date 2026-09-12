@@ -3,27 +3,31 @@
 # Installs Docker + the compose plugin, clones the repo, and brings the stack up.
 #
 # Usage (after SSH / Session Manager into the instance):
-#   curl -fsSL https://raw.githubusercontent.com/getzaa456/Poker777/main/deploy/ec2-bootstrap.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/67070030-collab/Poker777byPlemzzz/main/deploy/ec2-bootstrap.sh | bash
 # or copy this file up and run:  bash ec2-bootstrap.sh
 #
 # If the GitHub repo is PRIVATE, clone will fail — either make it public, or
-# clone with a token:  git clone https://<TOKEN>@github.com/getzaa456/Poker777.git
+# clone with a token:  git clone https://<TOKEN>@github.com/67070030-collab/Poker777byPlemzzz.git
 set -euo pipefail
 
-REPO_URL="https://github.com/getzaa456/Poker777.git"
+REPO_URL="https://github.com/67070030-collab/Poker777byPlemzzz.git"
 APP_DIR="$HOME/Poker777"
 
 echo "==> Installing Docker + git…"
 sudo dnf update -y
 sudo dnf install -y docker git
 sudo systemctl enable --now docker
-sudo usermod -aG docker "$USER" || true
+sudo usermod -aG docker "$(id -un)" || true
 
-echo "==> Installing docker compose plugin…"
+echo "==> Installing docker compose + buildx plugins…"
 sudo mkdir -p /usr/local/lib/docker/cli-plugins
 sudo curl -SL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64" \
   -o /usr/local/lib/docker/cli-plugins/docker-compose
 sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+# `docker compose build` needs buildx, which the dnf docker package doesn't ship.
+sudo curl -SL "https://github.com/docker/buildx/releases/download/v0.19.3/buildx-v0.19.3.linux-amd64" \
+  -o /usr/local/lib/docker/cli-plugins/docker-buildx
+sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-buildx
 
 echo "==> Fetching the code…"
 if [ -d "$APP_DIR/.git" ]; then

@@ -37,8 +37,8 @@
           <span></span><span></span><span></span>
         </button>
         <div>
-          <div class="room-title"><strong>Poker777</strong> | Dream Room</div>
-          <div class="room-subtitle">No Limit Hold'em • Blinds 50/100</div>
+          <div class="room-title"><strong>Poker777</strong> | <span id="room-name">Room</span></div>
+          <div class="room-subtitle">No Limit Hold'em • Blinds <span id="room-blinds">--/--</span></div>
         </div>
         <button class="table-tool-button" id="hand-guide-button" type="button">Hand guide</button>
         <button class="table-leave-button" id="leave-room-button" type="button">Leave</button>
@@ -94,7 +94,6 @@
 
             <div class="live-player-list" id="live-player-list"></div>
             <div class="live-room-status" id="live-room-status">Connecting to table...</div>
-            <div class="current-hand" id="current-hand">Waiting for cards</div>
 
           </div>
         </div>
@@ -109,9 +108,11 @@
       <div class="user-info">
         <div class="user-name" id="user-name">Me</div>
         <div class="user-chips" id="user-chips">--</div>
+        <span class="player-badge" id="user-badge" hidden></span>
         <div class="progress">
           <div class="progress-value" id="chip-progress"></div>
         </div>
+        <div class="current-hand" id="current-hand">Waiting for cards</div>
       </div>
       <div class="user-cards" id="user-cards"></div>
     </section>
@@ -233,6 +234,23 @@
       setTimeout(() => item.remove(), 5000);
     }
 
+    // A clear, colour-coded label of what a player last did (or their state).
+    function actionBadge(player) {
+      const fmt = (n) => PokerAPI.fmtChips(n);
+      if (player.status === 'FOLDED') return { text: 'FOLD', cls: 'act-fold' };
+      if (player.all_in) return { text: 'ALL-IN', cls: 'act-allin' };
+      const la = player.last_action;
+      if (la) {
+        if (la.action === 'CHECK') return { text: 'CHECK', cls: 'act-check' };
+        if (la.action === 'CALL') return { text: `CALL ${fmt(la.amount)}`, cls: 'act-call' };
+        if (la.action === 'BET') return { text: `BET ${fmt(la.amount)}`, cls: 'act-bet' };
+        if (la.action === 'RAISE') return { text: `RAISE ${fmt(la.amount)}`, cls: 'act-bet' };
+        if (la.action === 'FOLD') return { text: 'FOLD', cls: 'act-fold' };
+      }
+      if (player.status === 'YOUR TURN') return { text: '● THINKING', cls: 'act-turn' };
+      return { text: 'IN', cls: 'act-idle' };
+    }
+
     function renderState(state) {
       const players = Array.isArray(state.players) ? state.players : [];
       const maxPlayers = Number(state.max_players || 6);
@@ -241,15 +259,22 @@
         const player = occupied.get(seat);
         if (!player) return `<div class="waiting-seat player-seat-${seat}">Waiting for player</div>`;
         const initial = text((player.username || player.client_id || '?').slice(0, 1).toUpperCase());
-        if (String(player.client_id) === String(currentUser.id)) return `<div class="waiting-seat player-seat-${seat}">Your seat</div>`;
+        const dealer = player.is_dealer ? '<span class="dealer-chip" title="Dealer">D</span>' : '';
+        if (String(player.client_id) === String(currentUser.id)) {
+          return `<div class="waiting-seat player-seat-${seat}">Your seat${dealer}</div>`;
+        }
         const avatar = player.avatar_id ? window.avatarPicker.render(player.avatar_id, `player-${player.client_id}`) : initial;
-        return `<div class="player live-player player-seat-${seat}">
-          <div class="avatar"><div class="avatar-inner">${avatar}</div></div>
+        const badge = actionBadge(player);
+        const betLine = player.bet ? ` · bet ${PokerAPI.fmtChips(player.bet)}` : '';
+        return `<div class="player live-player player-seat-${seat} ${player.status === 'FOLDED' ? 'is-folded' : ''}">
+          <div class="avatar"><div class="avatar-inner">${avatar}</div>${dealer}</div>
           <div class="player-info"><div class="player-name">${text(player.username || player.client_id)}</div>
-          <div class="player-chips">🪙 ${PokerAPI.fmtChips(player.chips)}</div>
-          <div class="player-status">${text(player.status || 'WAITING')}</div></div>
+          <div class="player-chips">🪙 ${PokerAPI.fmtChips(player.chips)}${betLine}</div>
+          <div class="player-badge ${badge.cls}">${text(badge.text)}</div></div>
         </div>`;
       }).join('');
+      if (state.room_name) document.getElementById('room-name').textContent = state.room_name;
+      if (state.small_blind != null) document.getElementById('room-blinds').textContent = `${state.small_blind}/${state.big_blind}`;
       document.getElementById('pot-value').textContent = PokerAPI.fmtChips(state.pot);
       document.getElementById('community-card-list').innerHTML = (state.community_cards || [])
         .map((card) => cardMarkup(card, 'user-card community-card'))
@@ -258,6 +283,11 @@
       if (me) {
         document.getElementById('user-name').textContent = me.username || me.client_id;
         document.getElementById('user-chips').textContent = PokerAPI.fmtChips(me.chips);
+        const myBadge = document.getElementById('user-badge');
+        const mb = actionBadge(me);
+        myBadge.hidden = state.phase === 'WAITING';
+        myBadge.textContent = mb.text;
+        myBadge.className = `player-badge ${mb.cls}`;
         document.getElementById('user-cards').innerHTML = (me.hole_cards || []).map((card) => cardMarkup(card, 'user-card')).join('');
         document.getElementById('user-avatar-art').innerHTML = window.avatarPicker.render(currentUser.avatar_id, 'user');
         const hand = evaluateHand([...(me.hole_cards || []), ...(state.community_cards || [])]);
@@ -313,6 +343,10 @@
       currentUser = await PokerAPI.Auth.requireUser();
       if (!currentUser || !roomCode) return;
       const table = await PokerAPI.Tables.get(roomCode);
+      // Populate the header from the REAL table (name + blinds), not the static text.
+      document.getElementById('room-name').textContent = table.name || roomCode;
+      document.getElementById('room-blinds').textContent = `${table.min_bet}/${table.max_bet}`;
+      document.title = `Poker 777 — ${table.name || roomCode}`;
       const wsUrl = PokerAPI.API_BASE.replace(/^http/, 'ws') + '/ws?token=' + encodeURIComponent(PokerAPI.getToken());
       socket = new WebSocket(wsUrl);
       socket.addEventListener('open', () => {

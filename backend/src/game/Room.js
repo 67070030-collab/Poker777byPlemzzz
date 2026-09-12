@@ -57,6 +57,7 @@ export class Room {
     this.winningHand = null;
     this.winners = [];                 // [{ client_id, username, amount, hand }] (supports split/side pots)
     this.readyVotes = new Set();       // clientIds who voted to start the next hand (SHOWDOWN/WAITING)
+    this.lastActions = new Map();      // clientId -> { action, amount } for THIS street (shown on the seat)
   }
 
   /** Snapshot broadcast to clients. Hole cards are per-player; everything else
@@ -103,6 +104,7 @@ export class Room {
           to_call: Math.max(0, this.currentBet - streetBet),
           all_in: this.allIn.has(player.clientId),
           is_dealer: String(this.button) === String(player.clientId),
+          last_action: this.lastActions.get(String(player.clientId)) || null,
           status: this.folded.has(player.clientId)
             ? 'FOLDED'
             : this.allIn.has(player.clientId)

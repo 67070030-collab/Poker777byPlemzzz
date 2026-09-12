@@ -446,9 +446,11 @@ button {
   font-size: 13px; 
   white-space: nowrap; 
 }
-.current-hand { position: absolute; left: 50%; bottom: 18%; transform: translateX(-50%); z-index: 11; min-width: 190px; padding: 7px 14px; border: 1px solid rgba(255,219,102,.25); border-radius: 11px; background: rgba(20,15,35,.7); text-align: center; }
+/* "Your best hand" now lives inside the user card (next to your hole cards),
+   so it can never be covered by the table-centre overlays. */
+.current-hand { margin-top: 8px; padding: 6px 12px; border: 1px solid rgba(255,219,102,.25); border-radius: 10px; background: rgba(20,15,35,.55); text-align: left; }
 .current-hand strong { display: block; color: #ffdb66; font-size: 13px; }
-.current-hand span { display: block; margin-top: 2px; color: #b8aed4; font-size: 10px; }
+.current-hand span { display: block; margin-top: 1px; color: #b8aed4; font-size: 10px; }
 
 .start-game-button { 
   min-width: 150px; 
@@ -483,11 +485,37 @@ button {
 .player-chips { margin-top: 2px; color: #ffdb66; font-size: 13px; font-weight: 600; }
 .player-status { display: inline-block; margin-top: 4px; padding: 2px 8px; border-radius: 6px; background: rgba(255,255,255,.1); color: #a59bce; font-size: 10px; }
 
+/* Clear, colour-coded "what did this player do" badge (used on every seat + the user's own card). */
+.player-badge {
+  display: inline-block; margin-top: 5px; padding: 3px 10px; border-radius: 8px;
+  font-size: 11px; font-weight: 800; letter-spacing: .4px; text-transform: uppercase;
+  white-space: nowrap; border: 1px solid transparent;
+}
+.act-fold  { color: #ffb4b4; background: rgba(255,71,126,.16); border-color: rgba(255,71,126,.45); }
+.act-check { color: #cfc7ff; background: rgba(139,127,255,.16); border-color: rgba(139,127,255,.45); }
+.act-call  { color: #bdecff; background: rgba(95,208,232,.16); border-color: rgba(95,208,232,.5); }
+.act-bet   { color: #ffd9b0; background: rgba(255,159,87,.18); border-color: rgba(255,159,87,.55); }
+.act-allin { color: #20152e; background: linear-gradient(135deg,#ffdb66,#ff9f57); border-color: #ffdb66; }
+.act-turn  { color: #fff6c9; background: rgba(255,219,102,.14); border-color: rgba(255,219,102,.55); animation: badgePulse 1s ease-in-out infinite; }
+.act-idle  { color: #a59bce; background: rgba(255,255,255,.06); border-color: rgba(255,255,255,.14); }
+@keyframes badgePulse { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
+
+/* Dealer button chip on the avatar. */
+.avatar { position: relative; }
+.dealer-chip {
+  position: absolute; right: -4px; bottom: -4px; width: 24px; height: 24px; border-radius: 50%;
+  display: grid; place-items: center; font-size: 12px; font-weight: 900; color: #20152e;
+  background: linear-gradient(135deg,#ffffff,#dcd3ff); border: 2px solid #8b7fff;
+  box-shadow: 0 2px 8px rgba(0,0,0,.4);
+}
+/* Dim folded players so the table reads at a glance. */
+.player.is-folded { opacity: .45; }
+
 /* ==========================================
    USER AREA (ผู้เล่นปัจจุบัน)
    ========================================== */
 .user-section {
-  position: absolute; z-index: 15; bottom: 40px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; min-width: 390px;
+  position: absolute; z-index: 15; bottom: 40px; left: 40px; display: flex; align-items: center; min-width: 390px;
 }
 .user-section.is-your-turn .user-info { border-color: #ffdb66; box-shadow: 0 0 28px rgba(255,219,102,.45); }
 .user-section.is-your-turn::before { content: "YOUR TURN"; position: absolute; left: 50%; top: -28px; transform: translateX(-50%); color: #ffdb66; font-size: 12px; font-weight: 800; letter-spacing: 1.5px; text-shadow: 0 0 12px rgba(255,219,102,.8); }
@@ -591,11 +619,13 @@ button {
 .bet-value strong { color: white; font-size: 16px; }
 
 /* Responsive adjustments */
-@media (max-width: 1000px) {
+/* Below ~1200px the wide action bar + centered user card collide on one row,
+   so stack them: action bar centered at the very bottom, user card above it. */
+@media (max-width: 1200px) {
   .table-wrapper { width: 90vw; height: 55vh; }
   .player { transform: scale(.7); }
-  .action-bar { left: 50%; right: auto; bottom: 20px; transform: translateX(-50%) scale(.8); }
-  .user-section { bottom: 120px; transform: translateX(-50%) scale(.75); }
+  .action-bar { left: 50%; right: auto; bottom: 20px; transform: translateX(-50%) scale(.82); }
+  .user-section { left: 50%; bottom: 130px; transform: translateX(-50%) scale(.75); }
 }
 
 @media (max-width: 620px) {
@@ -613,7 +643,7 @@ button {
   .current-hand { bottom: 26%; min-width: 150px; }
 
   /* the player's own area */
-  .user-section { bottom: 168px; transform: translateX(-50%) scale(.72); }
+  .user-section { left: 50%; bottom: 168px; transform: translateX(-50%) scale(.72); }
   .user-card { width: 56px; height: 78px; font-size: 15px; }
   .user-card b { font-size: 15px; } .user-card span { font-size: 18px; }
 
@@ -636,7 +666,7 @@ button {
   .action-button { flex: 1 1 46px; height: 52px; }
   .action-button strong { font-size: 11px; }
   .action-button .action-icon { font-size: 15px; }
-  .user-section { bottom: 176px; transform: translateX(-50%) scale(.62); }
+  .user-section { left: 50%; bottom: 176px; transform: translateX(-50%) scale(.62); }
   .pot { padding: 6px 16px; } .pot strong { font-size: 16px; }
 }
 

@@ -119,6 +119,7 @@ export function startGame(room) {
   room.lastRaiseSize = room.bigBlind;
   room.winner = null; room.winnerName = null; room.winningHand = null; room.winners = [];
   room.readyVotes.clear();
+  room.lastActions.clear();
 
   rotateButton(room);
   const n = funded.length;
@@ -237,6 +238,7 @@ export function performAction(room, id, action, amount, timedOut = false) {
 
   room.acted.add(id);
   room.lastAction = { client_id: id, action, amount: displayAmount, timed_out: timedOut };
+  room.lastActions.set(String(id), { action, amount: displayAmount, timed_out: timedOut });
   room.broadcast('GAME_ACTION', room.lastAction);
 
   // Everyone else folded → last player standing wins uncontested.
@@ -261,6 +263,7 @@ export function advanceStreet(room) {
   room.currentBet = 0;
   room.lastRaiseSize = room.bigBlind;
   room.acted.clear();
+  room.lastActions.clear(); // per-street action badges reset when a new street opens
 
   if (room.phase === 'PREFLOP') { room.communityCards.push(...room.deck.splice(0, 3)); room.phase = 'FLOP'; }
   else if (room.phase === 'FLOP') { room.communityCards.push(room.deck.pop()); room.phase = 'TURN'; }
